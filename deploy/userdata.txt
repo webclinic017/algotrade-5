@@ -1,0 +1,67 @@
+#!/bin/bash
+export VOLUME_ID=vol-0d7eacd2c7c5b93f9
+apt-get update
+apt-get install awscli nvme-cli -y
+apt-get install \
+    apt-transport-https \
+    ca-certificates \
+    curl \
+    gnupg-agent \
+    software-properties-common -y
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo apt-key add -
+add-apt-repository \
+  "deb [arch=amd64] https://download.docker.com/linux/ubuntu \
+  $(lsb_release -cs) \
+  stable"
+wget http://s3.amazonaws.com/ec2metadata/ec2-metadata
+chmod a+x ec2-metadata
+mkdir /mount
+mkdir /var/lib/docker
+export AWS_INSTANCE_ID=$(./ec2-metadata -i | grep "instance-id:" | cut -d' ' -f2)
+export DEVICE_POSTFIX=xvdf
+export DEVICE=/dev/$DEVICE_POSTFIX
+export REGION=$(curl -s http://169.254.169.254/latest/meta-data/placement/availability-zone | sed 's/[a-z]$//')
+aws ec2  attach-volume --volume-id $VOLUME_ID --device $DEVICE --instance-id $AWS_INSTANCE_ID --region $REGION
+ATTACHMENT_STATE="unknown"
+until [ "${ATTACHMENT_STATE}" == "attached" ]; do
+    ATTACHMENT_STATE=$(aws ec2 describe-volumes \
+    --region $REGION \
+    --filters \
+        Name=attachment.instance-id,Values=${AWS_INSTANCE_ID} \
+        Name=attachment.device,Values=${DEVICE} \
+    --query Volumes[].Attachments[].State \
+    --output text)
+    sleep 2
+done
+if lsblk | grep -q $DEVICE_POSTFIX; then
+  echo "No NVME"
+else
+  # Change volume id as the volume id from nvme command don't have hyphen
+  export VOLUME_ID="${VOLUME_ID//-}"
+  # The device variable changes after attaching due to nvme
+  export DEVICE=$(sudo nvme list | grep $VOLUME_ID | awk '{print $1}')
+fi
+DEVICE_FS=`blkid -o value -s TYPE ${DEVICE} || echo ""`
+if [ "`echo -n $DEVICE_FS`" == "" ] ; then 
+  mkfs -t xfs ${DEVICE}
+fi
+mount ${DEVICE} /mount
+mkdir -p /mount/docker
+mkdir -p /etc/docker
+echo '{ 
+   "data-root": "/mount/docker" 
+}'  > /etc/docker/daemon.json
+apt-get install docker-ce docker-ce-cli containerd.io -y
+usermod -aG docker ubuntu
+newgrp docker
+docker container start 591
+
+# create new folder with only dockerfile with no extension and cd to the folder
+# sudo docker build -t {img_name} .
+# sudo docker run -d {img_name}
+# docker update --restart=always {container_name}
+# sudo docker container start {container_name}
+# current container_name is 7f5
+# chown `whoami` /mount
+# docker container logs 591 --tail -30 doesn't work
+# docker logs --since 2021-04-14 7f5

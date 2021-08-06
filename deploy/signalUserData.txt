@@ -1,0 +1,8 @@
+wget -qO- https://getpm2.com/install.sh | bash
+apt-get update
+apt-get install python3-pip
+pip3 install datetime
+pip3 install pandas
+pip3 install requests
+pip3 install awscli
+pm2 start main2.py --interpreter python3 --no-autorestart
